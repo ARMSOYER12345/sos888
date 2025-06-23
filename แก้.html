@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<title>AI หมากฮอส ไร้พ่าย</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  body { font-family: sans-serif; text-align: center; background: #fafafa; }
+  table { border-spacing: 0; margin: auto; }
+  td {
+    width: 40px; height: 40px;
+    border: 1px solid #999;
+    text-align: center;
+    vertical-align: middle;
+    font-size: 24px;
+    cursor: pointer;
+    position: relative;
+  }
+  .dark { background-color: #444; color: white; }
+  .light { background-color: #eee; }
+  .highlight { outline: 3px solid yellow; }
+  .move-highlight { background-color: #6f9 !important; cursor: pointer; }
+  button { margin: 8px; padding: 8px 20px; font-size: 16px; }
+  #result { font-weight: bold; margin-top: 10px; }
+  #count { margin-top: 5px; font-size: 14px; }
+</style>
+</head>
+<body onload="resetBoard()">
+  <h2>♟️ AI หมากฮอส: โหมดไร้พ่าย</h2>
+  <p>เล่นสีขาว: ⚪ เดินเอง คลิกเลือกหมากและเป้าหมาย</p>
+  <table id="board"></table>
+  <div>
+    <button onclick="aiAutoMove()">🤖 ให้ AI เดิน (สีดำ)</button>
+    <button onclick="resetBoard()">♻️ รีเซ็ต</button>
+  </div>
+  <p id="result"></p>
+  <p id="count"></p>
+
+<script>
+let board = [];
+let selectedPiece = null;
+let possibleMoves = [];
+
+// สร้างและแสดงกระดาน
+function renderBoard() {
+  let html = "";
+  let counts = {1:0,2:0,3:0,4:0};
+  for (let y=0; y<8; y++) {
+    html += "<tr>";
+    for (let x=0; x<8; x++) {
+      let c = (x + y) % 2 === 0 ? "light" : "dark";
+      let p = board[y][x];
+      let icon = p==1 ? "⚫" : p==2 ? "⚪" : p==3 ? "🔵" : p==4 ? "🟡" : "";
+
+      let classes = c;
+      if (selectedPiece && selectedPiece[0] === x && selectedPiece[1] === y) {
+        classes += " highlight";
+      }
+      if (possibleMoves.some(m => {
+        let dest = m[m.length-1];
+        return dest[0] === x && dest[1] === y;
+      })) {
+        classes += " move-highlight";
+      }
+
+      if (p > 0) counts[p]++;
+      html += `<td class="${classes}" onclick="cellClick(${x},${y})">${icon}</td>`;
+    }
+    html += "</tr>";
+  }
+  document.getElementById("board").innerHTML = html;
+  document.getElementById("count").innerText = `⚫:${counts[1]} 🔵:${counts[3]} ⚪:${counts[2]} 🟡:${counts[4]}`;
+}
+
+// รีเซ็ตกระดานเริ่มเกม
+function resetBoard() {
+  board = Array(8).fill(null).map(() => Array(8).fill(0));
+  // วางหมากขาว ⚪ 2 แถวบน บนช่องดำ
+  for(let y=0; y<=1; y++) {
+    for(let x=0; x<8; x++) {
+      if ((x + y) % 2 === 1) board[y][x] = 2;
+    }
+  }
+  // วางหมากดำ ⚫ 2 แถวล่าง บนช่องดำ
+  for(let y=6; y<=7; y++) {
+    for(let x=0; x<8; x++) {
+      if ((x + y) % 2 === 1) board[y][x] = 1;
+    }
+  }
+  selectedPiece = null;
+  possibleMoves = [];
+  renderBoard();
+  document.getElementById("result").innerText = "เริ่มเกม! คุณเป็นสีขาว ⚪ เดินก่อน";
+}
+
+// หาทางเดินกินแบบกระโดดข้ามหลายช่อง (multi jump) สำหรับหมากแต่ละตัว
+function getMultiJumpPaths(b, x, y, p, path = [[x,y]]) {
+  let out = [];
+  // กำหนดทิศทางเดิน (สำหรับหมากธรรมดาและฮอต)
+  let dirs = (p === 1) ? [[-1,-1],[1,-1]] : (p === 2) ? [[-1,1],[1,1]] : [[1,1],[1,-1],[-1,1],[-1,-1]];
+
+  for (let [dx,dy] of dirs) {
+    let cx = x + dx;
+    let cy = y + dy;
+    let hasEnemy = false;
+
+    while (cx >= 0 && cx < 8 && cy >= 0 && cy < 8) {
+      let t = b[cy][cx];
+
+      if (t === 0 && !hasEnemy) {
+        // ช่องว่างยังไม่มีศัตรูข้าม -> ถ้าเป็นฮอตยังเดินไกลได้
+        if (p >= 3) {
+          cx += dx;
+          cy += dy;
+          continue;
+        } else {
+          break; // หมากธรรมดาเดินได้ช่องเดียว ถ้าไม่มีศัตรูข้าม
+        }
+      } else if (t !== 0 && !hasEnemy && ((p===1||p===3) && (t===2||t===4) || (p===2||p===4) && (t===1||t===3))) {
+        // พบศัตรูตัวแรก
+        hasEnemy = true;
+        cx += dx;
+        cy += dy;
+      } else if (t === 0 && hasEnemy) {
+        // ช่องว่างหลังศัตรู สามารถกระโดดข้ามได้
+        let nx = cx;
+        let ny = cy;
+        let newPath = [...path, [nx, ny]];
+        let newBoard = simulateMove(newPath, b);
+        let next = getMultiJumpPaths(newBoard, nx, ny, p, newPath);
+        if (next.length) out.push(...next);
+        else out.push(newPath);
+        break;
+      } else {
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+// หาทางเดิน (กิน หรือเดินปกติ) ของผู้เล่น
+function getMoves(b, player) {
+  let jumps = [];
+  let normal = [];
+  for (let y=0; y<8; y++) {
+    for (let x=0; x<8; x++) {
+      let p = b[y][x];
+      if ((player === 1 && (p === 1 || p === 3)) || (player === 2 && (p === 2 || p === 4))) {
+        let jps = getMultiJumpPaths(b, x, y, p);
+        if (jps.length) {
+          jumps.push(...jps);
+        } else {
+          // หาเดินปกติ
+          let dirs = [[1,1],[1,-1],[-1,1],[-1,-1]];
+          for (let [dx,dy] of dirs) {
+            let nx = x + dx;
+            let ny = y + dy;
+            if (nx >= 0 && nx < 8 && ny >= 0 && ny < 8 && b[ny][nx] === 0) {
+              if ((p === 1 && dy === -1) || (p === 2 && dy === 1) || (p >= 3)) {
+                normal.push([[x,y],[nx,ny]]);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return jumps.length ? jumps : normal;
+}
+
+// จำลองการเดินบนกระดาน
+function simulateMove(move, inputBoard = board) {
+  let b = inputBoard.map(row => [...row]);
+  let [sx, sy] = move[0];
+  let p = b[sy][sx];
+  b[sy][sx] = 0;
+  for (let i=1; i<move.length; i++) {
+    let [x, y] = move[i];
+    let [px, py] = move[i-1];
+    let dx = Math.sign(x - px);
+    let dy = Math.sign(y - py);
+    let cx = px + dx;
+    let cy = py + dy;
+    while (cx != x || cy != y) {
+      if (b[cy][cx] != 0) {
+        b[cy][cx] = 0; // กินตัวตรงกลาง
+        break;
+      }
+      cx += dx;
+      cy += dy;
+    }
+  }
+  let [ex, ey] = move[move.length - 1];
+  if (p === 1 && ey === 0) p = 3;  // กลายเป็นฮอต (ฝั่งดำ)
+  else if (p === 2 && ey === 7) p = 4; // กลายเป็นฮอต (ฝั่งขาว)
+  b[ey][ex] = p;
+  return b;
+}
+
+// ฟังก์ชันประเมินสถานะกระดานสำหรับ AI
+function evaluate(b) {
+  let score = 0;
+  for (let y=0; y<8; y++) {
+    for (let x=0; x<8; x++) {
+      let p = b[y][x];
+      let center = (x >= 2 && x <= 5 && y >= 2 && y <= 5);
+      let edge = (x === 0 || x === 7 || y === 0 || y === 7);
+      if (p === 1) score += 5 + (center ? 0.5 : 0) - (edge ? 0.3 : 0);
+      else if (p === 3) score += 10 + (center ? 1 : 0);
+      else if (p === 2) score -= 4.5 + (center ? 0.5 : 0) - (edge ? 0.3 : 0);
+      else if (p === 4) score -= 9 + (center ? 1 : 0);
+    }
+  }
+  return score;
+}
+
+// Minimax + alpha-beta pruning
+function minimax(b, depth, max, alpha = -9999, beta = 9999) {
+  if (depth === 0) return [evaluate(b), null];
+  let moves = getMoves(b, max ? 1 : 2);
+  if (moves.length === 0) return [evaluate(b), null];
+
+  let best = max ? -9999 : 9999;
+  let bestMove = null;
+
+  for (let m of moves) {
+    let next = simulateMove(m, b);
+    let [val] = minimax(next, depth - 1, !max, alpha, beta);
+    if (max && val > best) {
+      best = val;
+      bestMove = m;
+      alpha = Math.max(alpha, val);
+    }
+    if (!max && val < best) {
+      best = val;
+      bestMove = m;
+      beta = Math.min(beta, val);
+    }
+    if (beta <= alpha) break;
+  }
+  return [best, bestMove];
+}
+
+// AI เดิน
+function aiAutoMove() {
+  let [score, move] = minimax(board, 10, true);
+  if (!move) {
+    document.getElementById("result").innerText = "❌ AI เดินไม่ได้ คุณชนะ!";
+    return;
+  }
+  board = simulateMove(move);
+  renderBoard();
+  document.getElementById("result").innerText = `🤖 AI เดิน: ${move.map(([x,y]) => `(${x},${y})`).join(" → ")}`;
+  selectedPiece = null;
+  possibleMoves = [];
+}
+
+// คลิกเลือกหรือเดินหมากฝั่งขาว
+function cellClick(x, y) {
+  let p = board[y][x];
+  if (possibleMoves.length > 0 && possibleMoves.some(m => {
+    let dest = m[m.length-1];
+    return dest[0] === x && dest[1] === y;
+  })) {
+    let move = possibleMoves.find(m => {
+      let dest = m[m.length-1];
+      return dest[0] === x && dest[1] === y;
+    });
+    board = simulateMove(move);
+    renderBoard();
+    document.getElementById("result").innerText = `คุณเดิน: ${move.map(([x,y]) => `(${x},${y})`).join(" → ")}`;
+    selectedPiece = null;
+    possibleMoves = [];
+    setTimeout(() => aiAutoMove(), 200);
+    return;
+  }
+  if (p === 2 || p === 4) {
+    selectedPiece = [x, y];
+    possibleMoves = getMultiJumpPaths(board, x, y, p);
+    if (possibleMoves.length === 0) {
+      let normalMoves = [];
+let dirs = [[1,1],[1,-1],[-1,1],[-1,-1]];
+for (let [dx,dy] of dirs) {
+  let steps = (p >= 3) ? 7 : 1;  // ถ้าเป็นฮอต เดินได้หลายช่อง
+  for (let s = 1; s <= steps; s++) {
+    let nx = x + dx * s;
+    let ny = y + dy * s;
+    if (nx >= 0 && nx < 8 && ny >= 0 && ny < 8 && board[ny][nx] === 0) {
+      if ((p === 2 && dy === 1 && s === 1) || p >= 3) {
+        normalMoves.push([[x,y],[nx,ny]]);
+      }
+    } else break;
+  }
+}
+      possibleMoves = normalMoves;
+    }
+    renderBoard();
+  } else {
+    selectedPiece = null;
+    possibleMoves = [];
+    renderBoard();
+  }
+}
+</script>
+</body>
+</html>
